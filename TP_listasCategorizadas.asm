@@ -24,7 +24,8 @@ menu: .ascii "Colecciones de objetos categorizados\n"
       .asciiz "0-Salir\n"
 enteroption: .asciiz "Ingrese la opcion deseada: "
 selectcategory: .asciiz ">"
-error: .asciiz "Error:"
+error: .asciiz "Error: "
+errorobject: .asciiz "No se encontro el objeto"
 optioninvalid: .asciiz "Opcion invalida.\n"
 return: .asciiz "\n"
 catName: .asciiz "Ingrese el nombre de una categoria: "
@@ -116,7 +117,7 @@ smalloc:
     move $v0, $t0          # Retornar dirección del nodo disponible
     lw $t0, 12($t0)        # Actualizar slist al siguiente nodo libre
     sw $t0, slist
-    jr $ra                 # Retornar
+    jr $ra                 # Retornar  
 # Implementación de sbrk
 sbrk:
     li $a0, 16             # Tamaño del nodo (4 palabras)
@@ -372,8 +373,80 @@ prevcategory:
    
    j endselectcat
 delcategory:
-    # Implementar lógica para borrar la categoría actual
-    jr $ra 
+    addiu $sp, $sp, -8      # Reservar espacio en el stack
+    sw $ra, 0($sp)          # Guardar valor de retorno
+    sw $t0, 4($sp)          # Guardar categoría actual
+
+    # Verificar si hay una categoría seleccionada
+    lw $t0, wclist          # $t0 = categoría seleccionada
+    beqz $t0, error401      # Error si no hay categoría seleccionada
+
+    # Verificar si es la única categoría
+    lw $t1, 12($t0)         # $t1 = siguiente nodo
+    beq $t1, $t0, deleteonly # Si es la única categoría
+
+    # Desconectar el nodo actual
+    lw $t2, 0($t0)          # $t2 = nodo anterior
+    lw $t3, 12($t0)         # $t3 = nodo siguiente
+    sw $t3, 12($t2)         # Actualizar "next" del anterior
+    sw $t2, 0($t3)          # Actualizar "prev" del siguiente
+
+    # Si la categoría actual es la cabecera, moverla
+    lw $t4, cclist          # $t4 = cabecera
+    beq $t0, $t4, updateheader
+     
+    sw $t3, wclist          # $t3 = nueva categoria actual
+
+    j freenode              # Liberar el nodo actual
+
+updateheader:
+    sw $t3, cclist          # Actualizar la cabecera a la siguiente categoría
+    sw $t3, wclist          # Actualizar la categoria actual
+    j freenode
+
+deleteonly:
+    # Si es la única categoría, vaciar la lista
+    sw $zero, cclist        # Vaciar la lista de categorías
+    sw $zero, wclist
+
+freenode:
+    # Agregar el nodo a la lista libre
+    lw $t5, slist           # Cargar la lista libre
+    sw $t5, 12($t0)         # "next" del nodo apunta a la lista libre
+    sw $t0, slist           # Actualizar la lista libre
+
+    # Decrementar el contador de categorías
+    lw $t6, categorycount   # $t6 = contador actual
+    addi $t6, $t6, -1       # Decrementar en 1
+    sw $t6, categorycount
+
+    # Mostrar mensaje de éxito
+    la $a0, success
+    li $v0, 4
+    syscall
+    j enddelcategory
+
+error401:
+    # Mostrar error si no hay categoría seleccionada
+    li $v0, 4
+    la $a0, error
+    syscall
+
+    li $v0, 1
+    li $a0, 401             # Código de error 701 (sin categoría seleccionada)
+    syscall
+
+    li $v0, 4
+    la $a0, return
+    syscall
+    j enddelcategory
+
+enddelcategory:
+    lw $ra, 0($sp)          # Restaurar valor de retorno
+    lw $t0, 4($sp)          # Restaurar categoría actual
+    addiu $sp, $sp, 8       # Restaurar el stack
+    jr $ra                  # Retornar
+    
 addobject:
     addiu $sp, $sp, -8    # Reservar espacio en el stack
     sw $ra, 0($sp)        # Guardar valor de retorno
@@ -498,6 +571,7 @@ listobject:
 
     # Recorrer la lista de objetos
     move $t2, $t1         # $t2 = nodo actual (inicialmente el primero)
+    move $t3, $t1 
 printobjectloop:
     # Imprimir el nombre del objeto actual
     lw $t4, 4($t2)        # $t4 = dirección del nombre del objeto
@@ -512,8 +586,10 @@ printobjectloop:
 
     # Moverse al siguiente objeto
     lw $t2, 12($t2)       # $t2 = siguiente nodo
-    beq $t2, $t1, endlistobjects  # Si regresamos al primero, terminamos
-    j printobjectloop
+    #beq $t2, $t1, endlistobjects  # Si regresamos al primero, terminamos
+    bne $t2, $t1, printobjectloop
+    #j printobjectloop
+    j endlistobjects
 
 noobjectsincategory:
     # Mensaje de error si no hay objetos en la categoría
@@ -563,5 +639,122 @@ error602:
     j endlist                               
 
 delobject:
-    # Implementar lógica para borrar objeto
+    addiu $sp, $sp, -8      # Reservar espacio en el stack
+    sw $ra, 0($sp)          # Guardar valor de retorno
+
+    # Verificar si hay una categoría seleccionada
+    lw $t0, wclist          # Cargar categoría seleccionada
+    beqz $t0, error701      # Si no hay categoría, mostrar error
+
+    # Obtener la lista de objetos de la categoría seleccionada
+    lw $t1, 4($t0)          # Cargar la dirección de la lista de objetos
+    beqz $t1, error702      # Si no hay objetos, mostrar error
+    
+
+    # Solicitar el ID del objeto a eliminar
+    li $v0, 4
+    la $a0, idObj
+    syscall
+    li $v0, 5
+    syscall
+    move $t2, $v0           # Guardar ID del objeto a eliminar
+
+    # Buscar el objeto con el ID proporcionado
+    move $t3, $t1           # Puntero a la lista de objetos
+
+find_object:
+    lw $t5, 8($t3)          # Cargar ID del objeto
+    beq $t5, $t2, delete_object   # Si se encontró el objeto, eliminarlo
+    lw $t3, 12($t3)         # Avanzar al siguiente objeto
+    lw $t4, 4($t0)
+    beq $t3, $t4, notfoundobject      # Si se llegó al principio de la lista, el objeto no existe
+    j find_object
+
+delete_object:
+    # Eliminar el objeto de la lista
+    lw $t4, 12($t3)
+    beq $t4, $t3, deleteonlyobj
+    
+    lw $t6, 0($t3)          # Cargar el nodo anterior
+    lw $t7, 12($t3)         # Cargar el nodo siguiente
+    
+    # Actualizar los punteros de los nodos adyacentes
+    sw $t7, 12($t6)          # El anterior apunta al siguiente
+    sw $t6, 0($t7)           # El siguiente apunta al anterior
+    
+    lw $t4, 4($t0)           # Tomo la direccion de la lista de objetos
+    beq $t3, $t4, updatehead # Si el primer objeto de la lista es igual al objeto que eliminamos actualizamos la propia lista
+    
+    
+    j freenode
+
+deleteonlyobj:
+    sw $zero, 4($t0)              
+    j freenode        
+
+updatehead:
+    sw $t7, 4($t0)          # El siguiente del primer objeto pasa a ser el primero de la lista
+
+freenodeobj:                
+    # Agregar el objeto a la lista de objetos libres
+    lw $t9, slist
+    sw $t9, 12($t3)         # Conectar el objeto a la lista libre
+    sw $t3, slist           # Actualizar la lista libre
+
+    # Decrementar el contador de objetos
+    lw $t0, objectcount
+    addi $t0, $t0, -1
+    sw $t0, objectcount
+
+    # Mostrar mensaje de éxito
+    la $a0, success
+    li $v0, 4
+    syscall
+
+    lw $ra, 0($sp)          # Restaurar valor de retorno
+    addiu $sp, $sp, 8       # Restaurar el stack
+    jr $ra                  # Retornar
+
+error701:
+    # Mostrar error si no hay categoría seleccionada
+    li $v0, 4
+    la $a0, error
+    syscall
+    li $v0, 1
+    li $a0, 701
+    syscall
+    li $v0, 4
+    la $a0, return
+    syscall
+    j end_delobject
+
+error702:
+    # Mostrar error si no hay objetos en la categoría seleccionada
+    li $v0, 4
+    la $a0, error
+    syscall
+    li $v0, 1
+    li $a0, 702
+    syscall
+    li $v0, 4
+    la $a0, return
+    syscall
+    j end_delobject
+
+notfoundobject:
+    # Mostrar error si el objeto no se encuentra
+    li $v0, 4
+    la $a0, error
+    syscall
+    li $v0, 4
+    la $a0, errorobject
+    syscall
+    li $v0, 4
+    la $a0, return
+    syscall
+    j end_delobject
+
+end_delobject:
+    lw $ra, 0($sp)
+    addiu $sp, $sp, 8
     jr $ra
